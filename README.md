@@ -1,5 +1,7 @@
 # Whisper Transcription Tool (Faster-Whisper large-v3-turbo)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A production-quality command-line tool for Windows that transcribes audio and video files using Faster-Whisper `large-v3-turbo` and generates clean subtitle files.
 
 ## Features
@@ -29,9 +31,10 @@ A production-quality command-line tool for Windows that transcribes audio and vi
 ```
 whisper_transcribe/
 ├── .gitignore
-├── whisper_transcribe.py
+├── LICENSE
+├── README.md
 ├── requirements.txt
-└── README.md
+└── whisper_transcribe.py
 ```
 
 ## Requirements
@@ -252,7 +255,11 @@ This provides good quality on modern CPUs and works without any NVIDIA hardware.
 - Timestamps in SRT/VTT come directly from the model segments (word-level timestamps contribute to segment boundaries).
 - For best Japanese subtitle quality, the combination of VAD + filler removal + short-segment merging + 42-char wrapping is applied.
 
-## License / Credits
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Credits
 
 - Powered by [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - Model: `large-v3-turbo` (OpenAI Whisper family, distilled for speed)
