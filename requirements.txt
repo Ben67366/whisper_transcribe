@@ -1,2 +1,5 @@
 faster-whisper
 tqdm
+python-dotenv
+# CUDA 12.1 build — provides cublas/cuda DLLs needed by ctranslate2
+torch --index-url https://download.pytorch.org/whl/cu121

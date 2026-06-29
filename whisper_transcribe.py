@@ -21,11 +21,13 @@ Usage:
     python whisper_transcribe.py audio.mp3
     python whisper_transcribe.py video.mp4 --language auto
     python whisper_transcribe.py interview.wav --language en
+    python whisper_transcribe.py                 # batch: process un-transcribed files from folderPath in .env (defaults to ./audios)
 """
 
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -45,19 +47,81 @@ JAPANESE_FILLERS: List[str] = [
 ]
 
 
-def get_device_and_compute_type() -> Tuple[str, str]:
-    """Detect available hardware and return optimal (device, compute_type)."""
+def check_cuda_status() -> str:
+    """Return 'ok', 'broken', or 'no_gpu'.
+
+    'ok'     — GPU visible and CUDA runtime is working.
+    'broken' — GPU hardware detected but CUDA runtime DLLs are missing.
+    'no_gpu' — No NVIDIA GPU found.
+    """
+    gpu_visible = False
+    try:
+        import ctranslate2  # type: ignore
+        if ctranslate2.get_cuda_device_count() > 0:
+            gpu_visible = True
+    except Exception:
+        pass
+
+    if not gpu_visible:
+        return "no_gpu"
+
+    # GPU is visible — now verify the runtime DLLs are actually loadable.
     try:
         import torch  # type: ignore
-
         if torch.cuda.is_available():
-            # NVIDIA GPU with CUDA
-            return "cuda", "float16"
-        else:
-            return "cpu", "int8"
+            return "ok"
     except Exception:
-        # Fallback if torch import or detection fails
-        return "cpu", "int8"
+        pass
+
+    return "broken"
+
+
+def prompt_device_choice() -> Tuple[str, str]:
+    """Interactive prompt shown when GPU is detected but CUDA runtime is broken.
+
+    Prints the situation, explains the fix, and asks the user to choose.
+    Returns (device, compute_type) ready for use.
+    """
+    print()
+    print("=" * 60)
+    print("  GPU detected, but CUDA runtime is not ready.")
+    print("=" * 60)
+    print()
+    print("  The CUDA runtime library (cublas64_12.dll) could not be")
+    print("  loaded. This usually means torch is not installed in the")
+    print("  current Python environment.")
+    print()
+    print("  To fix (run once, then re-run this script):")
+    print()
+    print("    pip install torch --index-url https://download.pytorch.org/whl/cu121")
+    print()
+    print("  Or if you are using a virtual environment (.venv):")
+    print()
+    print("    .venv\\Scripts\\pip install torch --index-url https://download.pytorch.org/whl/cu121")
+    print()
+    print("-" * 60)
+    print("  [G] Fix GPU later - exit now and follow the steps above")
+    print("  [C] Continue with CPU - slower, but runs immediately")
+    print("-" * 60)
+    print()
+
+    while True:
+        try:
+            choice = input("  Your choice (G/C): ").strip().upper()
+        except (EOFError, KeyboardInterrupt):
+            print("\nInterrupted.")
+            sys.exit(130)
+
+        if choice == "G":
+            print()
+            print("Exiting. Install torch with CUDA support and re-run.")
+            sys.exit(0)
+        elif choice == "C":
+            print()
+            print("Continuing with CPU (int8).")
+            return "cpu", "int8"
+        else:
+            print("  Please enter G or C.")
 
 
 def clean_text(text: str, lang: Optional[str] = None) -> str:
@@ -328,10 +392,24 @@ def transcribe(
             compute_type=compute_type,
         )
     except Exception as exc:
-        print(f"Error: Failed to load model 'large-v3-turbo'.")
-        print(f"Details: {exc}")
-        print("Possible causes: network issue during first-time download, or insufficient disk space.")
-        sys.exit(1)
+        exc_str = str(exc).lower()
+        if device == "cuda" and any(kw in exc_str for kw in ("dll", "cublas", "cuda", "library")):
+            print(f"[WARN] CUDA runtime library not found ({exc}).")
+            print("[WARN] Falling back to CPU. To fix: pip install torch --index-url https://download.pytorch.org/whl/cu121")
+            device = "cpu"
+            compute_type = "int8"
+            print(f"Loading model 'large-v3-turbo' (device={device}, compute_type={compute_type})...")
+            try:
+                model = WhisperModel("large-v3-turbo", device=device, compute_type=compute_type)
+            except Exception as exc2:
+                print(f"Error: Failed to load model on CPU fallback.")
+                print(f"Details: {exc2}")
+                sys.exit(1)
+        else:
+            print(f"Error: Failed to load model 'large-v3-turbo'.")
+            print(f"Details: {exc}")
+            print("Possible causes: network issue during first-time download, or insufficient disk space.")
+            sys.exit(1)
 
     print("Model loaded successfully.")
 
@@ -439,9 +517,23 @@ def transcribe(
     print(f"Output files saved next to: {input_path}")
 
 
+def resolve_device() -> Tuple[str, str]:
+    """Detect GPU status, prompt if needed, and return (device, compute_type)."""
+    status = check_cuda_status()
+
+    if status == "ok":
+        print("CUDA detected. Using GPU acceleration (float16).")
+        return "cuda", "float16"
+    elif status == "no_gpu":
+        print("No NVIDIA GPU detected. Using CPU (int8).")
+        return "cpu", "int8"
+    else:  # broken
+        return prompt_device_choice()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Transcribe audio/video using Faster-Whisper large-v3-turbo and generate subtitles.",
+        description="Transcribe audio/video using Faster-Whisper large-v3-turbo and generate subtitles. Run with no arguments to batch-process the 'audios' folder.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -449,12 +541,15 @@ Examples:
   python whisper_transcribe.py meeting.m4a --language ja
   python whisper_transcribe.py podcast.mp4 --language auto
   python whisper_transcribe.py lecture_en.wav --language en
+  python whisper_transcribe.py                 # auto: process files from folderPath in .env (skips if .srt exists)
         """,
     )
     parser.add_argument(
         "input",
+        nargs="?",
+        default=None,
         type=str,
-        help="Path to the input audio or video file (mp3, wav, m4a, flac, mp4, mkv)",
+        help="Path to a single audio/video file. If omitted, batch process all supported files in the 'audios' folder.",
     )
     parser.add_argument(
         "--language",
@@ -465,38 +560,147 @@ Examples:
 
     args = parser.parse_args()
 
-    input_path = Path(args.input).expanduser().resolve()
-
-    # Validation
-    if not input_path.exists():
-        print(f"Error: File not found: {input_path}")
-        sys.exit(1)
-
-    if not input_path.is_file():
-        print(f"Error: Not a file: {input_path}")
-        sys.exit(1)
-
-    ext = input_path.suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        print(f"Error: Unsupported file extension '{ext}'.")
-        print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
-        sys.exit(1)
-
-    # Device selection
-    device, compute_type = get_device_and_compute_type()
-    if device == "cuda":
-        print("CUDA detected. Using GPU acceleration (float16).")
-    else:
-        print("No CUDA. Using CPU (int8).")
-
     # Run transcription
     try:
-        transcribe(
-            input_path=input_path,
-            language=args.language,
-            device=device,
-            compute_type=compute_type,
-        )
+        if args.input is None:
+            # Batch / auto mode (triggered by run_auto.bat or running with no args):
+            # - Load folderPath from .env (create .env + default if missing or variable undefined)
+            # - Only transcribe files that do not already have a matching <name>.srt
+            try:
+                from dotenv import load_dotenv
+            except ImportError:
+                load_dotenv = None  # fallback to manual parse
+
+            env_file = Path.cwd() / ".env"
+            folder_str = None
+
+            if load_dotenv is not None:
+                load_dotenv(dotenv_path=str(env_file))
+                folder_str = os.getenv("folderPath") or os.getenv("FOLDERPATH")
+            else:
+                # Manual .env parse (simple key=value) if python-dotenv not available
+                if env_file.exists():
+                    try:
+                        for line in env_file.read_text(encoding="utf-8").splitlines():
+                            stripped = line.strip()
+                            if stripped.startswith("folderPath=") or stripped.startswith("FOLDERPATH="):
+                                folder_str = stripped.split("=", 1)[1].strip().strip("'\"")
+                                break
+                    except Exception:
+                        pass
+
+            if not folder_str:
+                # .env not found OR folderPath variable not defined -> create/append default
+                default_folder = "./audios"
+                line_to_add = "folderPath=./audios\n"
+                if not env_file.exists():
+                    env_file.write_text(line_to_add, encoding="utf-8")
+                    print(f"[INFO] Created {env_file.name} with default: folderPath={default_folder}")
+                else:
+                    try:
+                        content = env_file.read_text(encoding="utf-8")
+                        with env_file.open("a", encoding="utf-8") as f:
+                            if content and not content.endswith("\n"):
+                                f.write("\n")
+                            f.write(line_to_add)
+                        print(f"[INFO] Added folderPath={default_folder} to existing {env_file.name}")
+                    except Exception:
+                        print(f"[WARN] Could not update {env_file.name}; using default in memory only.")
+                folder_str = default_folder
+
+            # Resolve folder path (respect relative paths from CWD)
+            p = Path(folder_str).expanduser()
+            audios_dir = p if p.is_absolute() else (Path.cwd() / p)
+            audios_dir = audios_dir.resolve()
+
+            # Create the folder if it does not exist (first-run convenience)
+            if not audios_dir.exists():
+                try:
+                    audios_dir.mkdir(parents=True, exist_ok=True)
+                    print(f"[INFO] Created audio folder: {audios_dir}")
+                except Exception as e:
+                    print(f"Error: Could not create folder '{audios_dir}': {e}")
+                    sys.exit(1)
+
+            if not audios_dir.is_dir():
+                print(f"Error: '{audios_dir}' is not a directory.")
+                sys.exit(1)
+
+            # Collect candidates, then skip any that already have a same-named .srt
+            all_candidates = [
+                p for p in audios_dir.iterdir()
+                if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+            ]
+            files = sorted(
+                p for p in all_candidates
+                if not (p.parent / f"{p.stem}.srt").exists()
+            )
+            skipped = len(all_candidates) - len(files)
+
+            if not files:
+                if all_candidates:
+                    print(f"\nAll {len(all_candidates)} audio file(s) in '{audios_dir}' already have a matching .srt file. Nothing to do.")
+                else:
+                    print(f"\nNo supported audio/video files found in '{audios_dir}'.")
+                    print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+                sys.exit(0)
+
+            device, compute_type = resolve_device()
+            print(f"\nFound {len(files)} file(s) to transcribe in '{audios_dir}' (skipped {skipped} already done).")
+            print("Starting batch transcription (one by one)...\n")
+
+            success = 0
+            failed = 0
+            for idx, audio_path in enumerate(files, 1):
+                print("=" * 60)
+                print(f"[{idx}/{len(files)}] {audio_path.name}")
+                print("=" * 60)
+
+                try:
+                    transcribe(
+                        input_path=audio_path,
+                        language=args.language,
+                        device=device,
+                        compute_type=compute_type,
+                    )
+                    success += 1
+                except SystemExit as exc:
+                    # transcribe() calls sys.exit on errors. Treat per-file failures gracefully in batch.
+                    if exc.code == 130:  # user interrupt code
+                        raise
+                    print(f"\n⚠ Error processing {audio_path.name}. Continuing with next file...\n")
+                    failed += 1
+                    continue
+
+            print("\n" + "=" * 60)
+            print(f"Batch complete: {success} succeeded, {failed} failed.")
+            if failed > 0:
+                sys.exit(1)
+        else:
+            # Single file mode (original behavior)
+            input_path = Path(args.input).expanduser().resolve()
+
+            if not input_path.exists():
+                print(f"Error: File not found: {input_path}")
+                sys.exit(1)
+
+            if not input_path.is_file():
+                print(f"Error: Not a file: {input_path}")
+                sys.exit(1)
+
+            ext = input_path.suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                print(f"Error: Unsupported file extension '{ext}'.")
+                print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
+                sys.exit(1)
+
+            device, compute_type = resolve_device()
+            transcribe(
+                input_path=input_path,
+                language=args.language,
+                device=device,
+                compute_type=compute_type,
+            )
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
         sys.exit(130)

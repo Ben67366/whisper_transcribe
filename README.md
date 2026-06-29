@@ -11,253 +11,214 @@ A production-quality command-line tool for Windows that transcribes audio and vi
   - `filename.txt` — Clean plain-text transcript (no timestamps)
   - `filename.srt` — Standard SRT subtitle file
   - `filename.vtt` — WebVTT subtitle file
-- **Engine**: `faster-whisper` + `large-v3-turbo` model (automatically downloaded on first run)
-- **Language**: Japanese (`ja`) by default. Supports `--language auto` for detection or any Whisper language code (e.g. `en`, `zh`).
-- **GPU/CPU**: Automatically selects CUDA (float16) when an NVIDIA GPU is available, otherwise falls back to CPU (int8).
-- **VAD**: Silero VAD filtering enabled (`vad_filter=True`) to remove silence.
-- **Timestamps**: Accurate segment timing using `word_timestamps=True`.
-- **Japanese subtitle improvements**:
-  - Repeated filler words removed (えー, あの, うーん, etc.)
-  - Extremely short segments merged for readability
-- **Subtitle formatting** (SRT/VTT):
-  - Maximum 42 characters per line
-  - Maximum 2 lines per subtitle cue
-  - Intelligent splitting at punctuation and natural boundaries
-- Clean progress display with `tqdm`.
-- Robust error handling and clear messages.
+- **Engine**: `faster-whisper` + `large-v3-turbo` model (auto-downloaded on first run, ~800MB–1.5GB cached)
+- **Language**: Japanese (`ja`) by default. Supports `--language auto` for detection or any Whisper language code (`en`, `zh`, etc.)
+- **GPU/CPU**: Automatically selects CUDA (float16) on NVIDIA GPUs. If CUDA runtime is missing it prompts you to fix it or continue on CPU.
+- **Batch launcher**: `run_auto.bat` — double-click to process all new files in the `audios/` folder
+- **VAD**: Silero VAD filtering enabled to strip silence
+- **Japanese subtitle improvements**: filler word removal, short segment merging, 42-char line wrapping
 
 ## Project Structure
 
 ```
 whisper_transcribe/
+├── audios/                 # Drop audio/video files here for batch processing
+├── .env                    # Config: folderPath=./audios (auto-created on first run)
 ├── .gitignore
 ├── LICENSE
 ├── README.md
 ├── requirements.txt
+├── run_auto.bat            # Double-click launcher
 └── whisper_transcribe.py
 ```
 
-## Requirements
+## Quick Start (Double-click)
 
-- Windows 11
-- Python 3.11 or newer
-- (Optional but recommended for video files) ffmpeg in PATH
+1. Put audio/video files in the `audios/` folder
+2. Double-click `run_auto.bat`
+3. Find `.txt`, `.srt`, `.vtt` files next to each audio file
+
+Files that already have a matching `.srt` are automatically skipped.
 
 ## Installation
 
-### 1. Install Python
+### 1. Install Python 3.11+
 
-Download and install Python 3.11+ from the official site:
+Download from [python.org](https://www.python.org/downloads/windows/).
 
-https://www.python.org/downloads/windows/
+During installation, check **"Add python.exe to PATH"**.
 
-**Important during installation**:
-- Check the box **"Add python.exe to PATH"**
-- Choose "Install Now" or customize as needed.
-
-Verify installation:
+Verify:
 
 ```powershell
 python --version
-# Should print Python 3.11.x or higher
+# Python 3.11.x or higher
 ```
 
 ### 2. Create a Virtual Environment
 
-Open PowerShell or Command Prompt in the `whisper_transcribe` folder (or wherever you placed the files).
+Open PowerShell in the project folder:
 
 ```powershell
-# In the project directory
 python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-Activate the virtual environment:
+If you get an execution policy error:
 
 ```powershell
-# PowerShell
-.\.venv\Scripts\Activate.ps1
-
-# If you get an execution policy error, run this first (once):
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-# Command Prompt (cmd)
-.\.venv\Scripts\activate.bat
 ```
-
-You should see `(.venv)` at the start of your prompt.
 
 ### 3. Install Dependencies
 
+**GPU users (NVIDIA, CUDA 12.1):**
+
 ```powershell
-pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-This installs `faster-whisper` and `tqdm`.
+`requirements.txt` already includes the CUDA-enabled torch wheel. This is the recommended path.
 
-**First run** will automatically download the `large-v3-turbo` model (~800MB–1.5GB depending on cache format). It is cached for future runs.
+**CPU-only users:**
+
+```powershell
+pip install faster-whisper tqdm python-dotenv
+```
+
+### 4. (Optional) Install ffmpeg
+
+Required for `.mp4`, `.m4a`, `.mkv` files:
+
+```powershell
+# Chocolatey
+choco install ffmpeg
+```
+
+Or download from [ffmpeg.org](https://ffmpeg.org/download.html) and add the `bin` folder to PATH.
+
+## GPU / CUDA Setup
+
+The tool detects your GPU status automatically at startup:
+
+| Situation | What happens |
+|---|---|
+| NVIDIA GPU + CUDA working | Runs immediately on GPU |
+| No NVIDIA GPU | Runs on CPU, no prompt |
+| GPU detected, CUDA runtime missing | Interactive prompt (see below) |
+
+**Interactive prompt when CUDA runtime is missing:**
+
+```
+============================================================
+  GPU detected, but CUDA runtime is not ready.
+============================================================
+
+  The CUDA runtime library (cublas64_12.dll) could not be
+  loaded. This usually means torch is not installed in the
+  current Python environment.
+
+  To fix (run once, then re-run this script):
+
+    pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+  Or if you are using a virtual environment (.venv):
+
+    .venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+------------------------------------------------------------
+  [G] Fix GPU later - exit now and follow the steps above
+  [C] Continue with CPU - slower, but runs immediately
+------------------------------------------------------------
+
+  Your choice (G/C):
+```
+
+Choose **G** to exit and follow the fix steps, or **C** to run on CPU right away.
 
 ## Running the Tool
 
-Basic usage (Japanese by default):
+### Batch mode (recommended — via launcher)
+
+Drop files in `audios/`, double-click `run_auto.bat`. Already-transcribed files are skipped.
+
+### Command line — batch
 
 ```powershell
-python whisper_transcribe.py audio.mp3
+python whisper_transcribe.py --language auto
 ```
 
-With explicit language or auto-detection:
+### Command line — single file
 
 ```powershell
-# Force Japanese
-python whisper_transcribe.py meeting.m4a --language ja
+# Japanese (default)
+python whisper_transcribe.py audio.mp3
 
 # Auto language detection
 python whisper_transcribe.py podcast.mp4 --language auto
 
 # English
-python whisper_transcribe.py lecture_en.wav --language en
+python whisper_transcribe.py lecture.wav --language en
 ```
 
-The three output files will be created next to the input file:
-
-- `audio.txt`
-- `audio.srt`
-- `audio.vtt`
-
-### Example Console Output
+### Example output
 
 ```
-No CUDA. Using CPU (int8).
-Loading model 'large-v3-turbo' (device=cpu, compute_type=int8)...
+CUDA detected. Using GPU acceleration (float16).
+
+Found 2 file(s) to transcribe in '...\audios' (skipped 1 already done).
+Starting batch transcription (one by one)...
+
+============================================================
+[1/2] meeting.m4a
+============================================================
+Loading model 'large-v3-turbo' (device=cuda, compute_type=float16)...
 Model loaded successfully.
-Starting transcription of: audio.mp3
-Language forced: ja
-Detected language: ja (probability: 98.4%)
-Duration: 1243.7 seconds
-Transcribing: 100%|████████████████| 1243.7/1243.7s [...]
-Raw transcription produced 187 segments.
-After cleaning & merging: 142 segments.
+Starting transcription of: meeting.m4a
+Language: auto-detect
+Detected language: ja (probability: 97.2%)
+Duration: 843.5 seconds
+Transcribing: 100%|████████████| 843.5/843.5s [...]
+Raw transcription produced 134 segments.
+After cleaning & merging: 108 segments.
 Generating output files...
-  ✓ audio.txt
-  ✓ audio.srt
-  ✓ audio.vtt
+  ✓ meeting.txt
+  ✓ meeting.srt
+  ✓ meeting.vtt
 
 Transcription complete.
-Output files saved next to: C:\path\to\your\audio.mp3
 ```
-
-## GPU (CUDA) Setup Instructions
-
-For significantly faster transcription on NVIDIA GPUs:
-
-1. Make sure you have recent NVIDIA drivers installed.
-
-2. Install a CUDA-enabled version of PyTorch **before or instead of** the CPU version pulled by faster-whisper.
-
-   Recommended (CUDA 12.1):
-
-   ```powershell
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-   ```
-
-   For CUDA 11.8:
-
-   ```powershell
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-   ```
-
-3. Then install the project dependencies:
-
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-4. Verify GPU is detected by running the tool. You should see:
-
-   ```
-   CUDA detected. Using GPU acceleration (float16).
-   ```
-
-If you already installed the package with CPU torch, reinstall torch with the CUDA index URL above (it will replace the CPU wheel).
-
-**Note**: You must have a compatible NVIDIA GPU and CUDA toolkit/drivers. The program will safely fall back to CPU if CUDA is not available.
-
-## CPU-Only Setup Instructions
-
-No special action needed:
-
-```powershell
-pip install -r requirements.txt
-```
-
-The script will automatically choose:
-
-```
-device=cpu, compute_type=int8
-```
-
-This provides good quality on modern CPUs and works without any NVIDIA hardware.
 
 ## Troubleshooting
 
+### "Library cublas64_12.dll is not found"
+CUDA runtime DLLs are missing. Run:
+```powershell
+.venv\Scripts\pip install torch --index-url https://download.pytorch.org/whl/cu121
+```
+
 ### "Error: File not found"
-- Double-check the path. Use quotes around paths with spaces:
-  ```powershell
-  python whisper_transcribe.py "C:\path\to\your\audio\file.mp3"
-  ```
-- Use absolute or relative paths correctly from the current directory.
+Check the path. Wrap paths with spaces in quotes:
+```powershell
+python whisper_transcribe.py "C:\recordings\my meeting.mp4"
+```
 
-### "Unsupported file extension"
-- Only the listed formats are supported. Convert other formats to one of the supported ones (e.g. using ffmpeg).
+### ffmpeg errors on .mp4 / .m4a / .mkv
+Install ffmpeg and add its `bin` folder to PATH (see Installation step 4).
 
-### Model download fails or is very slow
-- Ensure you have a stable internet connection on first run.
-- The model is downloaded from Hugging Face. You can also pre-download it manually if needed, but automatic download is the intended flow.
-- Check disk space in your user cache (`%USERPROFILE%\.cache\huggingface`).
+### Model download fails
+The model downloads from Hugging Face on first run (~800MB–1.5GB). Check internet connection and disk space at `%USERPROFILE%\.cache\huggingface`.
 
-### ffmpeg-related errors on .mp4 / .m4a / .mkv
-- faster-whisper uses ffmpeg under the hood for many container formats.
-- Install ffmpeg on Windows:
-  - Using Chocolatey: `choco install ffmpeg`
-  - Or download the full build from https://ffmpeg.org/download.html, extract, and add the `bin` folder to your PATH.
-- After installing, restart your terminal/PowerShell.
+### Very slow on CPU
+The `large-v3-turbo` model is large. For long files on CPU, transcription takes time. GPU is strongly recommended. Using `--language ja` (explicit) is slightly faster than `--language auto`.
 
-### CUDA not detected even though I have an NVIDIA GPU
-- Install the CUDA-enabled torch wheel (see GPU section above).
-- Verify with Python:
-  ```powershell
-  python -c "import torch; print(torch.cuda.is_available())"
-  ```
-- Ensure you are using the activated `.venv`.
-- Update NVIDIA drivers.
-
-### Very slow on CPU / high memory usage
-- The `large-v3-turbo` model is still large. Transcription of long files can take time on CPU.
-- Consider using `--language ja` explicitly instead of auto (slightly faster).
-- Close other applications. The int8 quantization already helps keep memory reasonable.
-
-### Output files are empty or subtitles look broken
-- The VAD filter may have removed everything if the audio is extremely noisy or silent.
-- Japanese post-processing can remove very short segments. This is intentional for readability.
-- Check the `.txt` file — if it has content, the subtitles may simply have been aggressively cleaned.
-
-### "torch is not installed" or import errors after venv activation
-- Make sure you activated the virtual environment before running pip or the script.
-- Re-run `pip install -r requirements.txt` inside the activated environment.
-
-### KeyboardInterrupt / stopping the script
-- Press Ctrl+C. The script handles it gracefully.
-
-## Advanced Notes
-
-- The script always overwrites output files with the same base name.
-- All output files are written with UTF-8 encoding (correct for Japanese and other languages).
-- Timestamps in SRT/VTT come directly from the model segments (word-level timestamps contribute to segment boundaries).
-- For best Japanese subtitle quality, the combination of VAD + filler removal + short-segment merging + 42-char wrapping is applied.
+### Output files are empty or subtitles look wrong
+- VAD may have removed everything if audio is extremely noisy/silent
+- Japanese post-processing aggressively cleans short segments — check the `.txt` first
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ## Credits
 

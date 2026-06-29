@@ -105,3 +105,14 @@ Thumbs.db
 # *.mp4
 # *.mkv
 *.log
+
+
+audios/
+
+# Grok AI / Grok Build assistant (local context, instructions, settings)
+# Do not commit these — they are for your local Grok usage only
+.grok/
+AGENTS.md
+GROK.md
+*.grok.md
+.grok*
