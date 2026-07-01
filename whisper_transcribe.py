@@ -732,18 +732,72 @@ def transcribe(
     return generated
 
 
-def resolve_device() -> Tuple[str, str]:
-    """Detect GPU status, prompt if needed, and return (device, compute_type)."""
+def _update_env_key(env_file: Path, key: str, value: str) -> None:
+    """Write or update a key=value line in .env. Silently no-ops on any error."""
+    try:
+        if env_file.exists():
+            lines = env_file.read_text(encoding="utf-8").splitlines(keepends=True)
+            for i, line in enumerate(lines):
+                if line.lstrip().lower().startswith(f"{key.lower()}="):
+                    lines[i] = f"{key}={value}\n"
+                    env_file.write_text("".join(lines), encoding="utf-8")
+                    return
+            # Key not present — append
+            content = "".join(lines)
+            with env_file.open("a", encoding="utf-8") as f:
+                if content and not content.endswith("\n"):
+                    f.write("\n")
+                f.write(f"{key}={value}\n")
+        else:
+            env_file.write_text(f"{key}={value}\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def resolve_device(
+    device_pref: Optional[str] = None,
+    env_file: Optional[Path] = None,
+) -> Tuple[str, str]:
+    """Detect GPU status, prompt if needed, and return (device, compute_type).
+
+    device_pref: value of the 'device' key from .env ('gpu', 'cpu', or None/empty).
+    env_file:    path to .env; when provided the chosen device is saved on first run
+                 so the user is not asked again on subsequent runs.
+    """
+    pref = (device_pref or "").strip().lower()
+
+    if pref == "cpu":
+        print("Device set to CPU in .env. Using CPU (int8).")
+        return "cpu", "int8"
+
+    if pref == "gpu":
+        status = check_cuda_status()
+        if status == "ok":
+            print("CUDA detected. Using GPU acceleration (float16) [device=gpu in .env].")
+            return "cuda", "float16"
+        else:
+            print("[WARN] device=gpu set in .env but CUDA is not available. Falling back to CPU (int8).")
+            return "cpu", "int8"
+
+    # No preference set — auto-detect and prompt when ambiguous
     status = check_cuda_status()
 
     if status == "ok":
         print("CUDA detected. Using GPU acceleration (float16).")
-        return "cuda", "float16"
+        device, compute_type = "cuda", "float16"
     elif status == "no_gpu":
         print("No NVIDIA GPU detected. Using CPU (int8).")
-        return "cpu", "int8"
-    else:  # broken
-        return prompt_device_choice()
+        device, compute_type = "cpu", "int8"
+    else:  # broken — ask the user
+        device, compute_type = prompt_device_choice()
+
+    # Save the resolved choice to .env so the user is not asked on the next run
+    if env_file is not None:
+        choice = "gpu" if device == "cuda" else "cpu"
+        _update_env_key(env_file, "device", choice)
+        print(f"[INFO] Saved device={choice} to .env — you won't be asked again.")
+
+    return device, compute_type
 
 
 def main() -> None:
@@ -791,6 +845,7 @@ Examples:
             transcribe_type_raw = None
             output_path_str = None
             max_workers_raw = None
+            device_raw = None
 
             if load_dotenv is not None:
                 load_dotenv(dotenv_path=str(env_file))
@@ -798,6 +853,7 @@ Examples:
                 transcribe_type_raw = os.getenv("TranscribeType") or os.getenv("TRANSCRIBETYPE")
                 output_path_str = os.getenv("outputPath") or os.getenv("OUTPUTPATH")
                 max_workers_raw = os.getenv("maxWorkers") or os.getenv("MAXWORKERS")
+                device_raw = os.getenv("device") or os.getenv("DEVICE")
             else:
                 # Manual .env parse (simple key=value) if python-dotenv not available
                 if env_file.exists():
@@ -822,6 +878,8 @@ Examples:
                                 output_path_str = val
                             elif key == "maxworkers":
                                 max_workers_raw = val
+                            elif key == "device":
+                                device_raw = val
                     except Exception:
                         pass
 
@@ -901,7 +959,7 @@ Examples:
                 print(f"\nAll {len(all_candidates)} file(s) already have all requested outputs. Nothing to do.")
                 sys.exit(0)
 
-            device, compute_type = resolve_device()
+            device, compute_type = resolve_device(device_pref=device_raw, env_file=env_file)
 
             num_workers = max(1, int(max_workers_raw)) if max_workers_raw else 1
             parallel = num_workers > 1
@@ -1034,7 +1092,22 @@ Examples:
                 print(f"Supported extensions: {', '.join(sorted(SUPPORTED_EXTENSIONS))}")
                 sys.exit(1)
 
-            device, compute_type = resolve_device()
+            # Read device preference from .env (if present) even in single-file mode
+            _env = Path.cwd() / ".env"
+            _dev_pref = None
+            if _env.exists():
+                try:
+                    from dotenv import load_dotenv as _ld
+                    _ld(dotenv_path=str(_env))
+                    _dev_pref = os.getenv("device") or os.getenv("DEVICE")
+                except Exception:
+                    for _line in _env.read_text(encoding="utf-8").splitlines():
+                        _s = _line.strip()
+                        if _s.lower().startswith("device=") and not _s.startswith("#"):
+                            _dev_pref = _s.split("=", 1)[1].strip()
+                            break
+
+            device, compute_type = resolve_device(device_pref=_dev_pref, env_file=_env)
             transcribe(
                 input_path=input_path,
                 language=args.language,
