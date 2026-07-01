@@ -15,7 +15,7 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 echo.
-%PYTHON_CMD% whisper_transcribe.py --language auto
+"%PYTHON_CMD%" whisper_transcribe.py --language auto
 set "EXITCODE=%ERRORLEVEL%"
 
 echo.
